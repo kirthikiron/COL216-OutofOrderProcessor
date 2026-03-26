@@ -147,9 +147,11 @@ public:
 
         // Second pass: parse instructions
         inst_memory.resize(inst_count);
-        for (auto& [idx, iline] : inst_lines) {
+        for (auto& p : inst_lines) {
+            int idx = p.first;
+            std::string iline = p.second;
             inst_memory[idx] = parseInstruction(iline, idx, labels, mem_labels);
-        }
+}
     }
 
     // -------------------------------------------------------------------------
