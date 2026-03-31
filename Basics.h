@@ -59,6 +59,8 @@ struct ROBEntry {
 // Reservation Station Entry
 struct RSEntry {
     bool valid = false;     // slot occupied
+    ///////////////////////////////////////////////////////////
+    bool executing = false; // instruction has been issued to unit pipeline
 
     int  rob_tag = -1;      // ROB tag assigned to this instruction
 

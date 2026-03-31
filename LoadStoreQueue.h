@@ -151,20 +151,12 @@ public:
         if (!e.vj_ready) return;
         if (e.op == OpCode::SW && !e.vk_ready) return;
 
-        // If this is a load, check if the pipeline has any in-flight store ahead of it
-        // (store still executing means its address might conflict)
-        if (e.op == OpCode::LW) {
-            for (auto& inf : pipeline) {
-                if (inf.is_store) return; // wait for store to finish executing
-            }
-        }
-
         int addr = e.vj + e.imm;
         bool exc = false;
 
         LSQInFlight inf;
         inf.rob_tag = e.rob_tag;
-        inf.cycles_remaining = latency;
+        inf.cycles_remaining = latency > 0 ? latency - 1 : 0;
 
         if (e.op == OpCode::LW) {
             if (addr < 0 || addr >= (int)Memory.size()) {

@@ -57,6 +57,9 @@ public:
     // Halt flag
     bool halted = false;
     bool fetch_done = false; // no more instructions to fetch
+    ///////////////////////////////////////////////////////////
+    // One-cycle control recovery bubble after selected mispredict flushes.
+    bool control_recovery_bubble = false;
 
     Processor(ProcessorConfig& config) : cfg(config) {
         pc = 0;
@@ -404,7 +407,10 @@ public:
 
         // Clear execution units
         for (auto& u : units) {
-            for (auto& e : u.rs) e.valid = false;
+            for (auto& e : u.rs) {
+                e.valid = false;
+                e.executing = false;
+            }
             u.pipeline.clear();
             u.has_result = false;
         }
@@ -607,6 +613,19 @@ public:
 
         // Broadcast results on CDB
         broadcastOnCDB();
+
+        ///////////////////////////////////////////////////////////
+        // If the ROB head has become an exception after broadcast,
+        // stop in the same cycle instead of waiting for next commit stage.
+        if (rob_count > 0) {
+            ROBEntry& head = ROB[rob_head];
+            if (head.valid && head.ready && head.has_exception) {
+                exception = true;
+                pc = head.pc;
+                flush();
+                halted = true;
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -644,6 +663,10 @@ public:
                 bp.update(head.pc, target, taken, correct);
 
                 if (!correct) {
+                    ///////////////////////////////////////////////////////////
+                    // Add a recovery bubble only for in-program redirects with younger work.
+                    bool had_younger_speculation =
+                        (rob_count > 1) && (correct_next < (int)inst_memory.size());
                     // Flush and redirect
                     pc = correct_next;
                     // Retire this ROB entry first
@@ -651,6 +674,7 @@ public:
                     rob_head = (rob_head + 1) % (int)ROB.size();
                     rob_count--;
                     flush();
+                    control_recovery_bubble = had_younger_speculation;
                     return;
                 }
         }
@@ -685,8 +709,15 @@ public:
         // Pipeline stages executed in reverse order to avoid same-cycle forwarding issues
         stageCommit();
         if (halted) return false;
+        if (control_recovery_bubble) {
+            ///////////////////////////////////////////////////////////
+            // Consume one recovery cycle before resuming fetch/decode.
+            control_recovery_bubble = false;
+            return true;
+        }
 
         stageExecuteAndBroadcast();
+        if (halted) return false;
         stageDecode();
         stageFetch();
 

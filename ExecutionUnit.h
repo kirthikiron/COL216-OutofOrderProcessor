@@ -10,6 +10,7 @@
 // Represents one stage of an in-flight instruction inside the pipeline
 struct InFlightEntry {
     int  rob_tag   = -1;
+    int  rs_index  = -1;
     int  result    = 0;
     bool exception = false;
     int  cycles_remaining = 0; // how many more cycles until done
@@ -63,6 +64,7 @@ public:
             if (!rs[i].valid) {
                 rs[i] = e;
                 rs[i].valid = true;
+                rs[i].executing = false;
                 return i;
             }
         }
@@ -80,6 +82,9 @@ public:
         int best_cycle = INT32_MAX;
         for (int i = 0; i < (int)rs.size(); i++) {
             if (!rs[i].valid) continue;
+            ///////////////////////////////////////////////////////////
+            // Divider keeps RS occupied while executing to model structural limits.
+            if (name == UnitType::DIVIDER && rs[i].executing) continue;
             if (!rs[i].vj_ready || !rs[i].vk_ready) continue;
             if (rs[i].issue_cycle < best_cycle) {
                 best_cycle = rs[i].issue_cycle;
@@ -143,6 +148,12 @@ public:
             result_tag    = done.rob_tag;
             result_val    = done.result;
             has_exception = done.exception;
+            ///////////////////////////////////////////////////////////
+            // Free divider RS only when execution finishes, not at issue time.
+            if (name == UnitType::DIVIDER && done.rs_index >= 0 && done.rs_index < (int)rs.size()) {
+                rs[done.rs_index].valid = false;
+                rs[done.rs_index].executing = false;
+            }
             pipeline.pop_front();
         }
 
@@ -154,13 +165,20 @@ public:
             int res = compute(e, exc);
             InFlightEntry inf;
             inf.rob_tag          = e.rob_tag;
+            inf.rs_index         = idx;
             inf.result           = res;
             inf.exception        = exc;
             
-            //   inf.cycles_remaining = latency; // will be decremented next cycle
-            inf.cycles_remaining = latency > 0? latency - 1 : 0; // execute in same cycle if latency=0
+            //   inf.cycles_remaining = latency > 0 ? latency - 1 : 0; // will be decremented next cycle
+            inf.cycles_remaining = latency > 0 ? latency - 1 : 0;
             pipeline.push_back(inf);
-            e.valid = false; // free RS slot immediately on issue
+            if (name == UnitType::DIVIDER) {
+                ///////////////////////////////////////////////////////////
+                // Hold slot for divider ops to prevent unrealistic over-issue.
+                e.executing = true;
+            } else {
+                e.valid = false;
+            }
         }
     }
 };

@@ -2,6 +2,10 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall
 
+# Local defaults (autograder can override FILE)
+FILE ?= main.cpp
+ASM ?= tests/test1.s
+
 # ==========================================
 # make compile FILE=<filename.cpp>
 # ==========================================
@@ -16,10 +20,11 @@ compile:
 # ==========================================
 # make run FILE=<filename.s>
 # ==========================================
-# Update this target to run whatever script or 
-# program you wrote to preprocess the assembly labels. 
-# Example below assumes a Python script named 'compiler.py'.
+# No preprocessing step is required for this parser.
+# Keep this target to satisfy the autograder interface.
 run:
-	@echo "Preprocessing $(FILE)..."
-	python3 compiler.py $(FILE)
-	@echo "Preprocessing complete."
+	@echo "No preprocessing required for $(FILE)."
+
+# Convenience local runner
+run-sim: compile
+	./main $(ASM)
