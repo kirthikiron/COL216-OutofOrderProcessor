@@ -156,7 +156,9 @@ public:
             inf.rob_tag          = e.rob_tag;
             inf.result           = res;
             inf.exception        = exc;
-            inf.cycles_remaining = latency; // will be decremented next cycle
+            
+            //   inf.cycles_remaining = latency; // will be decremented next cycle
+            inf.cycles_remaining = latency > 0? latency - 1 : 0; // execute in same cycle if latency=0
             pipeline.push_back(inf);
             e.valid = false; // free RS slot immediately on issue
         }
