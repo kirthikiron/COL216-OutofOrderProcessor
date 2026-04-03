@@ -613,19 +613,6 @@ public:
 
         // Broadcast results on CDB
         broadcastOnCDB();
-
-        ///////////////////////////////////////////////////////////
-        // If the ROB head has become an exception after broadcast,
-        // stop in the same cycle instead of waiting for next commit stage.
-        if (rob_count > 0) {
-            ROBEntry& head = ROB[rob_head];
-            if (head.valid && head.ready && head.has_exception) {
-                exception = true;
-                pc = head.pc;
-                flush();
-                halted = true;
-            }
-        }
     }
 
     // -------------------------------------------------------------------------
@@ -717,7 +704,6 @@ public:
         }
 
         stageExecuteAndBroadcast();
-        if (halted) return false;
         stageDecode();
         stageFetch();
 
