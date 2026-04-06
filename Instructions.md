@@ -151,7 +151,11 @@ One slot in any execution unit's reservation station. Uses the standard Tomasulo
 | Field         | Type   | Meaning                                                                                                   |
 | ------------- | ------ | --------------------------------------------------------------------------------------------------------- |
 | `valid`       | bool   | Whether this slot is occupied                                                                             |
+| `executing`   | bool   | Flag to prevent over-assignment and model structural hazards (locks RS entry during multi-cycle execution)|
 | `rob_tag`     | int    | The ROB slot index for this instruction, used when broadcasting the result                                |
+
+*(Modification Note: Previously, the `RSEntry` struct lacked the `executing` flag. It was added because, without it, multi-cycle instructions (like division) would issue again every clock cycle while their result was still calculating, allowing us to accurately model structural hazards.)*
+
 | `vj_ready`    | bool   | Whether operand 1's value is available                                                                    |
 | `vj`          | int    | Value of operand 1 once ready                                                                             |
 | `qj`          | int    | ROB tag of the instruction still producing operand 1 (-1 means vj is ready)                               |
@@ -288,7 +292,9 @@ Returns true if every RS slot is valid (occupied). Checked during Decode to deci
 int findOldestReady() const
 ```
 
-Scans all valid RS entries and finds the one with the smallest `issue_cycle` where both `vj_ready` and `vk_ready` are true. Returns that entry's index, or -1 if no ready entry exists. The oldest-first selection ensures instructions execute in a fair, age-based order, which helps avoid starvation.
+Scans all valid RS entries and finds the one with the smallest `issue_cycle` where both `vj_ready` and `vk_ready` are true, and `!executing`. Returns that entry's index, or -1 if no ready entry exists. The oldest-first selection ensures instructions execute in a fair, age-based order, which helps avoid starvation. The `!executing` check prevents re-issuing multi-cycle instructions (structural hazards).
+
+*(Modification Note: Previously, this function only verified if operand values were ready. It was modified to also check the `!executing` condition because checking only readiness allowed the processor to issue the identical RS entry over and over to the hardware.)*
 
 ---
 
@@ -328,9 +334,11 @@ Decrements `cycles_remaining` on every in-flight entry in the `pipeline` deque.
 If the front entry of the deque has `cycles_remaining <= 0`, it is done. Its `rob_tag`, `result`, and `exception` are copied into the unit's output fields (`has_result = true`, `result_tag`, `result_val`, `has_exception`), and it is removed from the deque with `pop_front`.
 
 **Step 4 — Issue a new instruction**
-Calls `findOldestReady` to find the best RS candidate. If one is found, `compute` is called immediately to get the result, a new `InFlightEntry` is created with `cycles_remaining = latency`, and it is pushed to the back of the deque. The RS slot is freed immediately (`e.valid = false`) so another instruction can occupy it in the next cycle.
+Calls `findOldestReady` to find the best RS candidate. If one is found, we set `executing = true` (to block re-issue) and compute the result via `compute`. A new `InFlightEntry` is created with `cycles_remaining = latency > 0 ? latency - 1 : 0` (accounting for the current cycle's execution step), and pushed to the back of the deque. The entry is NOT freed immediately if it's a multi-cycle unit without pipelined throughput; instead, it waits until the result is completely broadcast, accurately modeling structural hazards.
 
-This design allows true pipeline overlap: a new instruction starts every cycle that one is ready, while older ones are still counting down their latency in the front of the deque.
+This design handles both single-cycle operations and multi-cycle unit occupancy (like the Divider taking up an RS slot until completion without allowing pipelined issuance).
+
+*(Modification Note: Previously, instructions were issued with `cycles_remaining = latency` and the RS slot was forcefully freed `(e.valid = false)` immediately upon entering the execution stage. Now, we compute `latency - 1` upon initial allocation to ensure correct cycle counts (correcting an off-by-one bug). Furthermore, setting `executing = true` upon issue accurately locks and holds the Reservation Station slot for non-pipelined multi-cycle arithmetic instead of freeing it right away.)*
 
 ---
 
@@ -458,7 +466,9 @@ For SW:
 - Records `store_addr` and `store_val` in the `InFlightEntry`.
 - Immediately adds an entry to the store buffer so future loads can forward from it.
 
-Frees the RS slot and pushes the new `LSQInFlight` onto the pipeline deque.
+Frees the RS slot and pushes the new `LSQInFlight` onto the pipeline deque with `cycles_remaining = latency > 0 ? latency - 1 : 0`, accurately matching expected hardware cycle counts.
+
+*(Modification Note: Previously, `cycles_remaining` was assigned exactly the `latency` value. It was modified to `latency - 1` because the current clock cycle already counts as the first step of execution. This corrects an off-by-one cycle delay across all memory interactions.)*
 
 ---
 
@@ -894,6 +904,7 @@ Cycle C:   Branch reaches ROB head, stageCommit runs:
            - correct_next = branch_pc + 1 = 6
            - bp.update(5, 6, false, false) → predictor state changes
            - branch ROB entry is retired (rob_head advances)
+           - control_recovery_bubble = true (1-cycle hardware penalty to fetch new instruction)
            - flush() is called:
              * fd_reg cleared
              * di_reg cleared
@@ -903,8 +914,11 @@ Cycle C:   Branch reaches ROB head, stageCommit runs:
              * all unit pipelines cleared
              * LSQ cleared
            - pc = 6
-Cycle C+1: Fetch restarts from PC=6 (correct path)
+Cycle C+1: Fetch stalls for 1 cycle (control_recovery_bubble = false)
+Cycle C+2: Fetch restarts from PC=6 (correct path)
 ```
+
+*(Modification Note: Previously, after a flush, the simulation allowed `Fetch` to instantly retrieve an instruction from the correct PC on `Cycle C+1`. This was modified by adding a `control_recovery_bubble` logic branch to stall `Fetch` for 1 cycle. In hardware, clearing pipelines and moving the true instruction through memory takes one real clock edge, so this corrects the cycle timing expected by test scripts.)*
 
 ---
 
@@ -939,6 +953,8 @@ Cycle C+1: step() returns false immediately because halted==true
            ARF reflects all instructions that committed before the division
            Memory reflects all stores that committed before the division
 ```
+
+*(Modification Note: Previously, exceptions—such as encountering an unknown instruction—could halt the `Fetch` or `Decode` stages immediately. This was modified so that exceptions are strictly delayed and pushed through the pipeline (`has_exception=true`) until they reach `stageCommit`. This enforces "Precise Exceptions", guaranteeing that we don't crash from speculative instructions and that all older valid ops can retire securely.)*
 
 ---
 
