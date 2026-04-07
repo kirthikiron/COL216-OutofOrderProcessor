@@ -118,7 +118,7 @@ public:
     // Pipeline tracking
     std::deque<LSQInFlight> pipeline;
 
-    void executeCycle(std::vector<int>& Memory) {
+    void executeCycle(std::vector<int>& Memory, int current_cycle) {
         has_result  = false;
         has_exception = false;
         result_tag  = -1;
@@ -146,6 +146,9 @@ public:
         if (idx < 0) return;
 
         LSQEntry& e = rs[idx];
+        ////////////////////
+        // Prevent same-cycle issue for newly dispatched LSQ entries.
+        if (e.issue_cycle >= current_cycle) return;
 
         // Check operand readiness
         if (!e.vj_ready) return;
@@ -153,6 +156,14 @@ public:
 
         int addr = e.vj + e.imm;
         bool exc = false;
+
+        ////////////////////
+        // Preserve store->load ordering for same-address hazards.
+        if (e.op == OpCode::LW) {
+            for (auto& pinf : pipeline) {
+                if (pinf.is_store && pinf.store_addr == addr) return;
+            }
+        }
 
         LSQInFlight inf;
         inf.rob_tag = e.rob_tag;
@@ -163,23 +174,20 @@ public:
                 exc = true;
                 inf.result = 0;
             } else {
-                // Store-to-load forwarding: check store buffer for most recent store to same addr
-                int forward_val = -1;
-                int forward_cycle = -1;
+                ////////////////////
+                // Forward latest executed-but-uncommitted store value for same address.
+                int forward_val = 0;
+                int forward_cycle = INT32_MIN;
+                bool have_forward = false;
                 for (auto& sb : store_buffer) {
                     if (!sb.valid) continue;
                     if (sb.addr == addr && sb.issue_cycle > forward_cycle) {
                         forward_val = sb.val;
                         forward_cycle = sb.issue_cycle;
+                        have_forward = true;
                     }
                 }
-                // Also check still-executing stores in pipeline (address known)
-                for (auto& pinf : pipeline) {
-                    if (pinf.is_store && pinf.store_addr == addr) {
-                        forward_val = pinf.store_val;
-                    }
-                }
-                inf.result = (forward_val != -1) ? forward_val : Memory[addr];
+                inf.result = have_forward ? forward_val : Memory[addr];
             }
             inf.is_store = false;
         } else { // SW

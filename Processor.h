@@ -609,7 +609,7 @@ public:
     void stageExecuteAndBroadcast() {
         // Run all execution units
         for (auto& u : units) u.executeCycle(clock_cycle);
-        lsq->executeCycle(Memory);
+        lsq->executeCycle(Memory, clock_cycle);
 
         // Broadcast results on CDB
         broadcastOnCDB();
@@ -646,8 +646,12 @@ public:
                 if (taken) correct_next = target;
                 else       correct_next = head.pc + 1;
 
-                // Update branch predictor
-                bp.update(head.pc, target, taken, correct);
+                ////////////////////
+                // Update branch predictor stats/state only for conditional branches.
+                if (head.op == OpCode::BEQ || head.op == OpCode::BNE ||
+                    head.op == OpCode::BLT || head.op == OpCode::BLE) {
+                    bp.update(head.pc, target, taken, correct);
+                }
 
                 if (!correct) {
                     ///////////////////////////////////////////////////////////
@@ -703,9 +707,9 @@ public:
             return true;
         }
 
-        stageExecuteAndBroadcast();
         stageDecode();
         stageFetch();
+        stageExecuteAndBroadcast();
 
         // Check termination: ROB empty, no instructions in-flight, fetch done
         bool pipeline_empty = (rob_count == 0) &&

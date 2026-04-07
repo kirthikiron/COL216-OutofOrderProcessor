@@ -161,6 +161,11 @@ public:
         int idx = findOldestReady();
         if (idx >= 0) {
             RSEntry& e = rs[idx];
+            ////////////////////
+            // Prevent same-cycle issue for freshly dispatched RS entries.
+            if (e.issue_cycle >= current_cycle) {
+                return;
+            }
             bool exc = false;
             int res = compute(e, exc);
             InFlightEntry inf;
